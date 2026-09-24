@@ -1,0 +1,39 @@
+# trycrypt — Mathematical Model
+
+## 1. Shannon Entropy of File Sizes
+
+Given N encrypted files with sizes {s_1, ..., s_N}, we apply log-scale
+binning (because file sizes span orders of magnitude) into K bins.
+
+For bin i, probability:
+    p_i = n_i / N
+
+Shannon entropy:
+    H(X) = - Σ_{i=1}^{K} p_i · log₂(p_i)
+
+Maximum entropy for K bins (uniform distribution):
+    H_max = log₂(K)
+
+Normalized entropy:
+    H_norm = H(X) / H_max     ∈ [0, 1]
+
+Interpretation:
+    H_norm → 1 : sizes uniformly distributed (low leakage)
+    H_norm → 0 : sizes concentrated in few bins (HIGH leakage)
+
+## 2. Why Log-Scale Binning?
+
+File sizes follow a log-normal distribution. Linear binning would collapse
+99% of files into the first bin. Log₁₀ binning preserves resolution across
+scales (KB, MB, GB).
+
+## 3. Fingerprint Heuristics
+
+| Range                | Inferred type        |
+|----------------------|----------------------|
+| 0 – 10 KB            | tiny config / JSON   |
+| 10 KB – 500 KB       | small document       |
+| 500 KB – 10 MB       | compressed image     |
+| 10 MB – 100 MB       | large image / video  |
+| 100 MB – 5 GB        | video / archive      |
+| > 5 GB               | ISO / disk image     |
