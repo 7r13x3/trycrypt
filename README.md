@@ -18,8 +18,8 @@ It is **not** designed to hide:
 - Password **strength** (KDF parameters)
 - Local **filesystem** hygiene (permissions, symlinks, cloud sync)
 
-`trycrypt` audits all three vectors against your own vault — the same way an
-attacker would — and produces a machine-readable risk report.
+`trycrypt` audits all three vectors against your own vault the same way an
+attacker would and produces a machine-readable risk report.
 
 ---
 
