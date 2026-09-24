@@ -1,35 +1,94 @@
+<div align="center">
+
 # 🔐 trycrypt
 
-> Offline security auditor for **Cryptomator** vaults.
-> Metadata leakage analysis · Password resilience · OS hygiene · SARIF export.
+**Offline security auditor for Cryptomator vaults.**
 
-![Python](https://img.shields.io/badge/python-3.11+-blue)
-![License](https://img.shields.io/badge/license-MIT-green)
-![Status](https://img.shields.io/badge/status-active-brightgreen)
+*Metadata leakage · Password resilience · OS hygiene · SARIF export*
+
+[![Python](https://img.shields.io/badge/python-3.11+-blue?style=for-the-badge&logo=python)](https://python.org)
+[![License](https://img.shields.io/badge/license-MIT-green?style=for-the-badge)](LICENSE)
+[![CI](https://img.shields.io/badge/CI-passing-brightgreen?style=for-the-badge)](.github/workflows/ci.yml)
+
+</div>
 
 ---
 
 ## 🎯 What is `trycrypt`?
 
-Cryptomator is excellent at hiding file **contents** and **names** in the cloud.
-It is **not** designed to hide:
+Cryptomator is excellent at hiding file **contents** and **names** in the cloud. However, it is **not** designed to hide:
 
 - File **sizes** (metadata leakage)
 - Password **strength** (KDF parameters)
 - Local **filesystem** hygiene (permissions, symlinks, cloud sync)
 
-`trycrypt` audits all three vectors against your own vault the same way an
-attacker would and produces a machine-readable risk report.
+`trycrypt` audits all three vectors against your own vault — the same way an attacker would — and produces a machine-readable risk report.
 
 ---
 
 ## 🧠 The Three Pillars
 
 | Module | What it checks | Math |
-|--------|----------------|------|
-| **Metadata** | File-size distribution, temporal patterns | Shannon entropy `H(X)` on log-binned sizes |
-| **Password** | scrypt KDF params, GPU time-to-crack | Attacker cost function `T = |Dict| / Hashrate` |
-| **Hygiene**  | `masterkey` permissions, symlinks, cloud sync | Filesystem ACL analysis |
+|:---:|:---|:---|
+| **Metadata** | File-size distribution, temporal patterns | Shannon entropy on log-binned sizes |
+| **Password** | scrypt KDF params, GPU time-to-crack | Attacker cost function |
+| **Hygiene** | `masterkey` permissions, symlinks, cloud sync | Filesystem ACL analysis |
+
+---
+
+## 📐 Mathematical Model
+
+### 1. Shannon Entropy of File Sizes
+
+To quantify metadata leakage, we measure the **Shannon entropy** $H(X)$ of the file-size distribution. Because file sizes span orders of magnitude (KB → GB), we apply $\log_{10}$ binning to preserve resolution:
+
+$$
+H(X) = -\sum_{i=1}^{K} p_i \log_2(p_i)
+$$
+
+Where $p_i = \frac{n_i}{N}$ is the probability of a file landing in bin $i$. 
+
+The **normalized entropy** is:
+
+$$
+H_{\text{norm}} = \frac{H(X)}{H_{\text{max}}} \in [0, 1]
+$$
+
+- $H_{\text{norm}} \to 1$ : Sizes uniformly distributed → **low leakage**
+- $H_{\text{norm}} \to 0$ : Sizes concentrated → **critical leakage**
+
+### 2. Attacker Cost Function (Password Resilience)
+
+Cryptomator uses `scrypt` with parameters $(N, r, p)$. The memory required per hash is:
+
+$$
+M = 128 \cdot N \cdot r \ \text{bytes}
+$$
+
+Since `scrypt` is memory-hard, the GPU bottleneck is **memory bandwidth**, not raw compute. The effective hashrate is:
+
+$$
+H_{\text{eff}} \approx \frac{B_{\text{gpu}} \cdot \eta}{128 \cdot N \cdot r}
+$$
+
+Where:
+
+| Symbol | Description |
+|:---:|:---|
+| $B_{\text{gpu}}$ | GPU memory bandwidth (bytes/sec) |
+| $\eta$ | Empirical scrypt efficiency ($\approx 0.05$) |
+| $N, r$ | scrypt parameters from `masterkey.cryptomator` |
+
+The **total time to crack** using a dictionary of size $|D|$ is:
+
+$$
+T_{\text{total}} = \frac{|D|}{H_{\text{eff}}} = \frac{|D| \cdot 128 \cdot N \cdot r}{B_{\text{gpu}} \cdot \eta}
+$$
+
+> **Example (RTX 4090, Cryptomator defaults):**
+> $N = 32768$, $r = 8$, $B_{\text{gpu}} = 1008 \ \text{GB/s}$, $|D| = 14.3\text{M}$ (RockYou)
+> 
+> $T_{\text{total}} \approx 2.65 \ \text{hours}$ → **CRITICAL**
 
 ---
 
@@ -39,38 +98,3 @@ attacker would and produces a machine-readable risk report.
 git clone https://github.com/7r13x3/trycrypt.git
 cd trycrypt
 pip install -e .
-🛠️ Usage
-# Full audit (runs all three modules)
-trycrypt audit /path/to/vault
-
-# JSON export
-trycrypt audit /path/to/vault --output json --export report.json
-
-# SARIF export (GitHub Advanced Security, Splunk, Elastic)
-trycrypt sarif /path/to/vault --export report.sarif
-
-# Password resilience only
-trycrypt crack /path/to/vault --gpu "RTX 4090"
-
-# OS hygiene only
-trycrypt hygiene /path/to/vault
-Commands
-Command	Description
-trycrypt audit <vault>	Run all three modules (metadata + password + hygiene)
-trycrypt crack <vault>	Estimate GPU time-to-crack for the vault password
-trycrypt hygiene <vault>	Run OS-level hygiene checks only
-trycrypt sarif <vault>	Generate a SARIF 2.1.0 report for SIEM integration
-📐 Mathematical Model
-Shannon Entropy of File Sizes
-H(X) = - Σ p_i · log₂(p_i)
-Attacker Cost Function (Password)
-T_total = |Dictionary| / ((B_gpu · η) / (128 · N · r))
-Where:
-
-B_gpu = GPU memory bandwidth (bytes/sec)
-
-η ≈ 0.05 (empirical scrypt efficiency)
-
-N, r = scrypt parameters from masterkey.cryptomator
-
-See docs/MATH.md for the full derivation.
