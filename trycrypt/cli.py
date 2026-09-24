@@ -8,6 +8,7 @@ from rich.table import Table
 from .vault import CryptomatorVault
 from .analysis.metadata import analyze_metadata
 from .analysis.password import analyze_password_resilience
+from .analysis.hygiene import analyze_hygiene
 
 app = typer.Typer(
     name="trycrypt",
@@ -46,19 +47,24 @@ def audit(
     except Exception as e:
         console.print(f"[yellow]⚠ Could not parse masterkey: {e}[/yellow]")
 
-    report = {"metadata": None, "password": None}
+    report = {"metadata": None, "password": None, "hygiene": None}
 
-    console.print("\n[bold]» Analyzing metadata leakage...[/bold]")
+    console.print("\n[bold]» [1/3] Analyzing metadata leakage...[/bold]")
     meta = analyze_metadata(v)
     report["metadata"] = meta
     if "error" not in meta:
         _render_metadata(meta)
 
-    console.print("\n[bold]» Analyzing password resilience...[/bold]")
+    console.print("\n[bold]» [2/3] Analyzing password resilience...[/bold]")
     pw = analyze_password_resilience(v)
     report["password"] = pw
     if "error" not in pw:
         _render_password(pw)
+
+    console.print("\n[bold]» [3/3] Analyzing OS hygiene...[/bold]")
+    hyg = analyze_hygiene(v)
+    report["hygiene"] = hyg
+    _render_hygiene(hyg)
 
     if output == "json":
         console.print_json(json.dumps(report, indent=2, default=str))
@@ -90,6 +96,23 @@ def crack(
     _render_password(result)
 
 
+@app.command()
+def hygiene(
+    vault: Path = typer.Argument(..., help="Path to Cryptomator vault directory"),
+):
+    """Run only the OS hygiene module."""
+    v = CryptomatorVault(vault)
+    if not v.validate():
+        console.print("[bold red]✗ Invalid Cryptomator vault[/bold red]")
+        raise typer.Exit(1)
+    console.print(Panel.fit(
+        "[bold yellow]🛡️  OS Hygiene Check[/bold yellow]",
+        border_style="yellow",
+    ))
+    result = analyze_hygiene(v)
+    _render_hygiene(result)
+
+
 def _render_metadata(r: dict):
     t = Table(title="Metadata Leakage Analysis", border_style="cyan")
     t.add_column("Metric", style="bold")
@@ -100,7 +123,7 @@ def _render_metadata(r: dict):
     t.add_row("Max entropy H_max", f"{r['entropy']['max']:.4f}")
     t.add_row("Normalized entropy", f"{r['entropy']['normalized']:.4f}")
     console.print(t)
-    console.print(f"\n[bold]Verdict:[/bold] {r['entropy']['interpretation']}\n")
+    console.print(f"[bold]Verdict:[/bold] {r['entropy']['interpretation']}\n")
 
     fp = Table(title="File-Size Fingerprints", border_style="magenta")
     fp.add_column("Inferred type")
@@ -108,13 +131,6 @@ def _render_metadata(r: dict):
     for name, count in r["fingerprints"].items():
         fp.add_row(name, f"{count:,}")
     console.print(fp)
-
-    tm = Table(title="Temporal Activity (Top Hours)", border_style="yellow")
-    tm.add_column("Hour of day")
-    tm.add_column("File writes", justify="right")
-    for row in r["temporal_top_hours"]:
-        tm.add_row(f"{row['hour']:02d}:00", f"{row['count']:,}")
-    console.print(tm)
 
 
 def _render_password(r: dict):
@@ -137,20 +153,63 @@ def _render_password(r: dict):
         cpu.add_row("Time to crack (RockYou)", r["cpu_benchmark"]["time_to_crack_human"])
         console.print(cpu)
 
-    gpu_t = Table(title="GPU Time-to-Crack Estimates (RockYou, 14.3M passwords)", border_style="red")
+    gpu_t = Table(title="GPU Time-to-Crack (RockYou, 14.3M)", border_style="red")
     gpu_t.add_column("GPU", style="bold")
     gpu_t.add_column("Hashes/sec", justify="right")
     gpu_t.add_column("Time to crack", justify="right")
     for gpu_name, info in r["gpu_estimates"].items():
-        gpu_t.add_row(
-            gpu_name,
-            f"{info['hashes_per_second']:,.2f}",
-            info["time_to_crack_human"],
-        )
+        gpu_t.add_row(gpu_name, f"{info['hashes_per_second']:,.2f}", info["time_to_crack_human"])
     console.print(gpu_t)
+    console.print(f"[bold]Verdict:[/bold] {r['verdict']}")
 
-    console.print(f"\n[bold]Verdict:[/bold] {r['verdict']}")
-    console.print(f"[dim]Target GPU: {r['target_gpu']}[/dim]")
+
+def _render_hygiene(r: dict):
+    score_table = Table(title="OS Hygiene Score", border_style="yellow")
+    score_table.add_column("Metric", style="bold")
+    score_table.add_column("Value", justify="right")
+    score_table.add_row("Score (0-100)", str(r["score"]))
+    score_table.add_row("Verdict", r["verdict"])
+    console.print(score_table)
+
+    if r["permissions"]:
+        p = r["permissions"]
+        perms = Table(title="Masterkey Permissions", border_style="cyan")
+        perms.add_column("Field", style="bold")
+        perms.add_column("Value", justify="right")
+        perms.add_row("Mode", p["mode_human"])
+        perms.add_row("Octal", p["mode_octal"])
+        perms.add_row("World readable", str(p["world_readable"]))
+        perms.add_row("World writable", str(p["world_writable"]))
+        perms.add_row("Severity", p["severity"])
+        perms.add_row("Finding", p["finding"])
+        console.print(perms)
+
+    if r["symlinks"]:
+        sym = Table(title="Symlinks", border_style="red")
+        sym.add_column("Path")
+        sym.add_column("Escapes vault")
+        sym.add_column("Severity")
+        for s in r["symlinks"]:
+            sym.add_row(s["path"], str(s["escapes_vault"]), s["severity"])
+        console.print(sym)
+
+    if r["cloud_sync"]:
+        cs = Table(title="Cloud Sync Detection", border_style="magenta")
+        cs.add_column("Provider")
+        cs.add_column("Severity")
+        cs.add_column("Finding")
+        for c in r["cloud_sync"]:
+            cs.add_row(c["provider"], c["severity"], c["finding"])
+        console.print(cs)
+
+    if r["path_traversal"]:
+        pt = Table(title="Path Traversal Risks", border_style="red")
+        pt.add_column("Path")
+        pt.add_column("Severity")
+        pt.add_column("Finding")
+        for p in r["path_traversal"]:
+            pt.add_row(p["path"], p["severity"], p["finding"])
+        console.print(pt)
 
 
 if __name__ == "__main__":
