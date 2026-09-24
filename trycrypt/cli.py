@@ -9,6 +9,7 @@ from .vault import CryptomatorVault
 from .analysis.metadata import analyze_metadata
 from .analysis.password import analyze_password_resilience
 from .analysis.hygiene import analyze_hygiene
+from .reporting.sarif import generate_sarif
 
 app = typer.Typer(
     name="trycrypt",
@@ -18,10 +19,34 @@ app = typer.Typer(
 console = Console()
 
 
+def _full_audit(v: CryptomatorVault) -> dict:
+    """Run all three modules and return the combined report."""
+    report = {"metadata": None, "password": None, "hygiene": None}
+
+    console.print("\n[bold]» [1/3] Analyzing metadata leakage...[/bold]")
+    meta = analyze_metadata(v)
+    report["metadata"] = meta
+    if "error" not in meta:
+        _render_metadata(meta)
+
+    console.print("\n[bold]» [2/3] Analyzing password resilience...[/bold]")
+    pw = analyze_password_resilience(v)
+    report["password"] = pw
+    if "error" not in pw:
+        _render_password(pw)
+
+    console.print("\n[bold]» [3/3] Analyzing OS hygiene...[/bold]")
+    hyg = analyze_hygiene(v)
+    report["hygiene"] = hyg
+    _render_hygiene(hyg)
+
+    return report
+
+
 @app.command()
 def audit(
     vault: Path = typer.Argument(..., help="Path to Cryptomator vault directory"),
-    output: str = typer.Option("table", "--output", "-o", help="table | json"),
+    output: str = typer.Option("table", "--output", "-o", help="table | json | sarif"),
     export: Path = typer.Option(None, "--export", "-e", help="Export report to file"),
 ):
     """Run a full security audit on a Cryptomator vault."""
@@ -47,30 +72,20 @@ def audit(
     except Exception as e:
         console.print(f"[yellow]⚠ Could not parse masterkey: {e}[/yellow]")
 
-    report = {"metadata": None, "password": None, "hygiene": None}
-
-    console.print("\n[bold]» [1/3] Analyzing metadata leakage...[/bold]")
-    meta = analyze_metadata(v)
-    report["metadata"] = meta
-    if "error" not in meta:
-        _render_metadata(meta)
-
-    console.print("\n[bold]» [2/3] Analyzing password resilience...[/bold]")
-    pw = analyze_password_resilience(v)
-    report["password"] = pw
-    if "error" not in pw:
-        _render_password(pw)
-
-    console.print("\n[bold]» [3/3] Analyzing OS hygiene...[/bold]")
-    hyg = analyze_hygiene(v)
-    report["hygiene"] = hyg
-    _render_hygiene(hyg)
+    report = _full_audit(v)
 
     if output == "json":
         console.print_json(json.dumps(report, indent=2, default=str))
+    elif output == "sarif":
+        sarif = generate_sarif(report)
+        console.print_json(json.dumps(sarif, indent=2, default=str))
 
     if export:
-        export.write_text(json.dumps(report, indent=2, default=str))
+        if output == "sarif":
+            payload = generate_sarif(report)
+        else:
+            payload = report
+        export.write_text(json.dumps(payload, indent=2, default=str))
         console.print(f"\n[green]✓ Report exported to {export}[/green]")
 
 
@@ -84,7 +99,6 @@ def crack(
     if not v.validate():
         console.print("[bold red]✗ Invalid Cryptomator vault[/bold red]")
         raise typer.Exit(1)
-
     console.print(Panel.fit(
         f"[bold magenta]💥 Password Resilience — {gpu}[/bold magenta]",
         border_style="magenta",
@@ -111,6 +125,22 @@ def hygiene(
     ))
     result = analyze_hygiene(v)
     _render_hygiene(result)
+
+
+@app.command()
+def sarif(
+    vault: Path = typer.Argument(..., help="Path to Cryptomator vault directory"),
+    export: Path = typer.Option(..., "--export", "-e", help="Output SARIF file path"),
+):
+    """Generate a SARIF report (for GitHub Advanced Security / SIEM)."""
+    v = CryptomatorVault(vault)
+    if not v.validate():
+        console.print("[bold red]✗ Invalid Cryptomator vault[/bold red]")
+        raise typer.Exit(1)
+    report = _full_audit(v)
+    payload = generate_sarif(report)
+    export.write_text(json.dumps(payload, indent=2, default=str))
+    console.print(f"[green]✓ SARIF report written to {export}[/green]")
 
 
 def _render_metadata(r: dict):
